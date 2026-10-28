@@ -1,6 +1,7 @@
 package com.port80.app.service
 
 import android.content.Context
+import android.view.ScaleGestureDetector
 import com.pedro.common.ConnectChecker
 import com.pedro.common.VideoCodec as RootEncoderVideoCodec
 import com.pedro.library.rtmp.RtmpCamera2
@@ -53,6 +54,7 @@ class RtmpCamera2Bridge(
         RedactingLogger.d(TAG, "startPreview(cameraId=${cameraId ?: "default"})")
         try {
             rtmpCamera2 = RtmpCamera2(openGlView, connectChecker)
+            attachPinchZoom(openGlView)
             RedactingLogger.d(TAG, "RtmpCamera2 instance created with OpenGlView")
             if (cameraId != null) {
                 rtmpCamera2?.startPreview(cameraId)
@@ -87,8 +89,49 @@ class RtmpCamera2Bridge(
         RedactingLogger.d(TAG, "replaceView() — hot-swapping to new surface")
         try {
             rtmpCamera2?.replaceView(openGlView)
+            attachPinchZoom(openGlView)
         } catch (e: Exception) {
             RedactingLogger.e(TAG, "replaceView() failed", e)
+        }
+    }
+
+    // ── Pinch-to-zoom ────────────────────────────────────────────────────
+
+    /**
+     * Lets the user zoom the camera with a two-finger pinch on the preview.
+     * The zoom is applied to the camera itself, so it is visible in the live stream.
+     * The gesture detector is created on the view's UI thread.
+     */
+    private fun attachPinchZoom(openGlView: OpenGlView) {
+        openGlView.post {
+            try {
+                val detector = ScaleGestureDetector(
+                    openGlView.context,
+                    object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+                        override fun onScale(detector: ScaleGestureDetector): Boolean {
+                            zoomBy(detector.scaleFactor)
+                            return true
+                        }
+                    }
+                )
+                openGlView.setOnTouchListener { _, event ->
+                    detector.onTouchEvent(event)
+                    true
+                }
+            } catch (e: Exception) {
+                RedactingLogger.e(TAG, "Failed to attach pinch-to-zoom", e)
+            }
+        }
+    }
+
+    private fun zoomBy(scaleFactor: Float) {
+        val camera = rtmpCamera2 ?: return
+        try {
+            val range = camera.zoomRange
+            val target = (camera.zoom * scaleFactor).coerceIn(range.lower, range.upper)
+            camera.setZoom(target)
+        } catch (e: Exception) {
+            RedactingLogger.e(TAG, "Failed to apply zoom", e)
         }
     }
 
