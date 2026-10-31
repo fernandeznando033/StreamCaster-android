@@ -26,9 +26,23 @@ import androidx.compose.material.icons.filled.Podcasts
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Slider
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.IconButton
+import androidx.compose.runtime.mutableIntStateOf
+import com.port80.app.crash.CrashRecorder
+import kotlin.math.roundToInt
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.mutableLongStateOf
@@ -97,7 +111,6 @@ import kotlinx.coroutines.flow.collectLatest
  *
  * Controls are at the right edge for easy thumb reach in landscape.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StreamScreen(
     viewModel: StreamViewModel = hiltViewModel(),
@@ -180,22 +193,36 @@ fun StreamScreen(
         }
     }
 
-    if (showAudioSheet) {
-        ModalBottomSheet(
-            onDismissRequest = { showAudioSheet = false },
-            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-        ) {
-            Text(
-                text = "Audio de la transmisión",
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(horizontal = 16.dp)
-            )
-            AudioFxPanel(
-                modifier = Modifier
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp)
-            )
-        }
+    // Last unexpected crash (if any), shown once so the cause is known
+    var lastCrash by remember { mutableStateOf(CrashRecorder.readLastCrash(context)) }
+    lastCrash?.let { crashText ->
+        AlertDialog(
+            onDismissRequest = {
+                CrashRecorder.clear(context)
+                lastCrash = null
+            },
+            title = { Text("La app se cerró inesperadamente") },
+            text = {
+                Text(
+                    text = crashText.take(3000),
+                    fontSize = 11.sp,
+                    modifier = Modifier.verticalScroll(rememberScrollState())
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    CrashRecorder.clear(context)
+                    lastCrash = null
+                }) { Text("Cerrar") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE)
+                        as? android.content.ClipboardManager
+                    cm?.setPrimaryClip(android.content.ClipData.newPlainText("crash", crashText))
+                }) { Text("Copiar") }
+            }
+        )
     }
 
     // Show error snackbar when stream stops with an error
@@ -306,6 +333,17 @@ fun StreamScreen(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .padding(bottom = 12.dp)
+                )
+            }
+
+            // Layer 6: live panel drawn inside this screen (no separate window),
+            // so opening it never disturbs the camera surface or the stream.
+            if (showAudioSheet) {
+                LivePanel(
+                    viewModel = viewModel,
+                    isLive = isActiveStream,
+                    onClose = { showAudioSheet = false },
+                    modifier = Modifier.align(Alignment.CenterStart)
                 )
             }
         }
@@ -707,5 +745,92 @@ private fun vibrateAlert(context: Context, pattern: LongArray) {
             vibrator.vibrate(pattern, -1)
         }
     } catch (_: Exception) {
+    }
+}
+
+/**
+ * Live panel (audio EQ/compressor, video bitrate and event log). It is a
+ * regular part of the stream screen, so it can be opened and used while live.
+ */
+@Composable
+private fun LivePanel(
+    viewModel: StreamViewModel,
+    isLive: Boolean,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val savedBitrate by viewModel.videoBitrateKbps.collectAsState()
+    val log by viewModel.sessionLog.collectAsState()
+    var bitrate by remember(savedBitrate) { mutableIntStateOf(savedBitrate) }
+
+    Surface(
+        modifier = modifier
+            .fillMaxHeight()
+            .width(380.dp)
+            .padding(8.dp)
+            // Swallow taps so they don't reach the camera preview below
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = {}
+            ),
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f)
+    ) {
+        Column(
+            modifier = Modifier
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "Ajustes en vivo",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f)
+                )
+                IconButton(onClick = onClose) {
+                    Icon(Icons.Filled.Close, contentDescription = "Cerrar")
+                }
+            }
+
+            Text("Video", style = MaterialTheme.typography.titleSmall)
+            Row(modifier = Modifier.fillMaxWidth()) {
+                Text("Bitrate máximo", modifier = Modifier.weight(1f))
+                Text("$bitrate kbps")
+            }
+            Slider(
+                value = bitrate.toFloat(),
+                onValueChange = { bitrate = ((it / 250f).roundToInt() * 250).coerceIn(1000, 8000) },
+                onValueChangeFinished = { viewModel.setLiveVideoBitrate(bitrate) },
+                valueRange = 1000f..8000f,
+                steps = 27
+            )
+            Text(
+                if (isLive) "Se aplica al instante, sin cortar la transmisión."
+                else "Se usará al iniciar la transmisión.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+            Text("Audio", style = MaterialTheme.typography.titleSmall)
+            Spacer(modifier = Modifier.height(4.dp))
+            AudioFxPanel()
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+            Text("Registro de la transmisión", style = MaterialTheme.typography.titleSmall)
+            if (log.isEmpty()) {
+                Text(
+                    "Sin eventos todavía.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                log.asReversed().forEach { line ->
+                    Text(line, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
     }
 }

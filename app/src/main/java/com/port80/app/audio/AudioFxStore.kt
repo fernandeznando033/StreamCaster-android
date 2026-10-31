@@ -17,14 +17,12 @@ data class AudioFxSettings(
     val eqEnabled: Boolean = true,
     /** Gains in dB for [BAND_FREQS_HZ], range [MIN_GAIN_DB]..[MAX_GAIN_DB]. */
     val eqGainsDb: List<Float> = List(BAND_COUNT) { 0f },
-    val compressorEnabled: Boolean = false,
-    val compThresholdDb: Float = -18f,
-    val compRatio: Float = 3f,
-    val compMakeupDb: Float = 0f,
+    /** 0 = off, 1 = soft, 2 = medium, 3 = strong. See [CompressorPreset]. */
+    val compressorPreset: Int = 0,
     val outputGainDb: Float = 0f,
     val limiterEnabled: Boolean = true,
     /** Use Android's UNPROCESSED audio source when a USB mixer is connected. */
-    val rawUsbInput: Boolean = true,
+    val rawUsbInput: Boolean = false,
 ) {
     companion object {
         const val BAND_COUNT = 5
@@ -33,6 +31,18 @@ data class AudioFxSettings(
         /** Band 0 is a low shelf, band 4 a high shelf, the rest are peaking filters. */
         val BAND_FREQS_HZ = floatArrayOf(80f, 250f, 1000f, 3500f, 10000f)
         val BAND_LABELS = listOf("Graves", "Medio-graves", "Medios", "Presencia", "Agudos")
+    }
+}
+
+/** Simple compressor presets: threshold (dBFS), ratio and make-up gain (dB). */
+enum class CompressorPreset(val label: String, val thresholdDb: Float, val ratio: Float, val makeupDb: Float) {
+    OFF("Apagado", 0f, 1f, 0f),
+    SOFT("Suave", -16f, 2f, 2f),
+    MEDIUM("Medio", -20f, 3f, 4f),
+    STRONG("Fuerte", -24f, 4f, 6f);
+
+    companion object {
+        fun of(index: Int): CompressorPreset = entries.getOrElse(index) { OFF }
     }
 }
 
@@ -71,13 +81,11 @@ object AudioFxStore {
         return AudioFxSettings(
             eqEnabled = p.getBoolean("eq_enabled", d.eqEnabled),
             eqGainsDb = List(AudioFxSettings.BAND_COUNT) { i -> p.getFloat("eq_band_$i", 0f) },
-            compressorEnabled = p.getBoolean("comp_enabled", d.compressorEnabled),
-            compThresholdDb = p.getFloat("comp_threshold", d.compThresholdDb),
-            compRatio = p.getFloat("comp_ratio", d.compRatio),
-            compMakeupDb = p.getFloat("comp_makeup", d.compMakeupDb),
+            compressorPreset = p.getInt("comp_preset", d.compressorPreset)
+                .coerceIn(0, CompressorPreset.entries.size - 1),
             outputGainDb = p.getFloat("output_gain", d.outputGainDb),
             limiterEnabled = p.getBoolean("limiter_enabled", d.limiterEnabled),
-            rawUsbInput = p.getBoolean("raw_usb_input", d.rawUsbInput),
+            rawUsbInput = p.getBoolean("raw_usb_input_v2", d.rawUsbInput),
         )
     }
 
@@ -85,13 +93,10 @@ object AudioFxStore {
         p.edit().apply {
             putBoolean("eq_enabled", s.eqEnabled)
             s.eqGainsDb.forEachIndexed { i, g -> putFloat("eq_band_$i", g) }
-            putBoolean("comp_enabled", s.compressorEnabled)
-            putFloat("comp_threshold", s.compThresholdDb)
-            putFloat("comp_ratio", s.compRatio)
-            putFloat("comp_makeup", s.compMakeupDb)
+            putInt("comp_preset", s.compressorPreset)
             putFloat("output_gain", s.outputGainDb)
             putBoolean("limiter_enabled", s.limiterEnabled)
-            putBoolean("raw_usb_input", s.rawUsbInput)
+            putBoolean("raw_usb_input_v2", s.rawUsbInput)
         }.apply()
     }
 }

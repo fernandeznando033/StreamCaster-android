@@ -72,6 +72,12 @@ interface EncoderBridge {
     /** Re-apply [StreamTweaks.flip180] to the outgoing stream. */
     fun refreshStreamFlip() {}
 
+    /** True when the send queue is filling up (network slower than the encoder). */
+    fun hasCongestion(): Boolean = false
+
+    /** Packets discarded because the send queue was full: (audio, video). */
+    fun networkDroppedFrames(): Pair<Long, Long> = 0L to 0L
+
     /** Release all encoder and camera resources. Call this on service destroy. */
     fun release()
 

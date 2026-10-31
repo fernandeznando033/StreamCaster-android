@@ -28,6 +28,7 @@ class SrtCamera2Bridge(
 ) : EncoderBridge {
 
     companion object {
+        private const val SEND_CACHE_FRAMES = 500
         private const val TAG = "SrtCamera2Bridge"
         /** Minimal SRT Access Control stream_id: publish mode, no resource filter. */
         private const val DEFAULT_SRT_STREAM_ID = "#!::m=publish"
@@ -170,6 +171,13 @@ class SrtCamera2Bridge(
         }
 
         try {
+            // Larger send queue (~6 s instead of ~2.5 s) so short mobile-data
+            // dips are absorbed instead of discarding audio/video packets.
+            try {
+                camera.getStreamClient().resizeCache(SEND_CACHE_FRAMES)
+            } catch (e: Exception) {
+                RedactingLogger.e(TAG, "Could not resize send cache", e)
+            }
             camera.startStream(srtUrl)
             RedactingLogger.d(TAG, "startStream() invoked on SRT encoder")
         } catch (e: Exception) {
@@ -215,6 +223,19 @@ class SrtCamera2Bridge(
         val bitrateBps = bitrateKbps * 1000
         RedactingLogger.d(TAG, "setVideoBitrateOnFly(${bitrateKbps} kbps → $bitrateBps bps)")
         srtCamera2?.setVideoBitrateOnFly(bitrateBps)
+    }
+
+    override fun hasCongestion(): Boolean = try {
+        srtCamera2?.getStreamClient()?.hasCongestion() == true
+    } catch (e: Exception) {
+        false
+    }
+
+    override fun networkDroppedFrames(): Pair<Long, Long> = try {
+        val client = srtCamera2?.getStreamClient()
+        (client?.getDroppedAudioFrames() ?: 0L) to (client?.getDroppedVideoFrames() ?: 0L)
+    } catch (e: Exception) {
+        0L to 0L
     }
 
     override fun refreshStreamFlip() {

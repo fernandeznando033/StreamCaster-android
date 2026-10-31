@@ -91,4 +91,7 @@ interface StreamingServiceControl {
 
     /** Re-apply the live 180-degree stream rotation toggle. */
     fun refreshStreamFlip() {}
+
+    /** Change the video bitrate during a live stream (no encoder restart). */
+    fun setLiveVideoBitrate(kbps: Int) {}
 }

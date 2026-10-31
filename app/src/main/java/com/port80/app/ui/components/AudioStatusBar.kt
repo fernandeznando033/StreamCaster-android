@@ -60,10 +60,21 @@ fun AudioStatusBar(
         )
         if (status.silent) Warning("SIN AUDIO: revisar cable USB y mesa")
         if (status.clipping) Warning("MESA SATURANDO: bajar el MAIN")
-        if (status.cutCount > 0) {
+        if (status.suggestedSampleRate > 0) {
             Warning(
-                text = "Cortes de audio: ${status.cutCount}",
+                "La mesa entrega ${formatKhz(status.measuredSampleRate)} kHz: detener e iniciar de nuevo"
+            )
+        } else if (status.cutCount > 0) {
+            Warning(
+                text = "Cortes de audio en el celular: ${status.cutCount}",
                 color = if (recentCut) Color(0xFFE53935) else Color(0xFF8D6E00)
+            )
+        }
+        val netDrops = status.netDroppedAudio + status.netDroppedVideo
+        if (netDrops > 0) {
+            Warning(
+                text = "Pérdidas por red: audio ${status.netDroppedAudio}, video ${status.netDroppedVideo}",
+                color = Color(0xFF8D6E00)
             )
         }
     }
@@ -109,9 +120,12 @@ private fun Warning(text: String, color: Color = Color(0xFFE53935)) {
 private fun inputDescription(s: AudioStatus): String {
     if (s.sampleRate == 0) return "Audio: esperando"
     val source = s.usbDeviceName?.let { "USB ($it)" } ?: "Micrófono interno"
-    val khz = if (s.sampleRate % 1000 == 0) "${s.sampleRate / 1000}" else
-        String.format(java.util.Locale.US, "%.1f", s.sampleRate / 1000f).replace('.', ',')
+    val khz = formatKhz(s.sampleRate)
     val ch = if (s.channels == 2) "estéreo" else "mono"
     val raw = if (s.rawSource) " · sin procesar" else ""
     return "$source · $khz kHz · $ch$raw"
 }
+
+private fun formatKhz(hz: Int): String =
+    if (hz % 1000 == 0) "${hz / 1000}"
+    else String.format(java.util.Locale.US, "%.1f", hz / 1000f).replace('.', ',')

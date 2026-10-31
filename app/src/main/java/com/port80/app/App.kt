@@ -3,6 +3,7 @@ package com.port80.app
 import android.app.Application
 import com.port80.app.crash.AcraConfigurator
 import com.port80.app.audio.AudioFxStore
+import com.port80.app.crash.CrashRecorder
 import dagger.hilt.android.HiltAndroidApp
 
 /**
@@ -29,5 +30,6 @@ class App : Application() {
     override fun onCreate() {
         super.onCreate()
         AudioFxStore.init(this)
+        CrashRecorder.install(this)
     }
 }

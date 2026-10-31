@@ -6,6 +6,7 @@ import android.app.Service
 import android.content.res.Configuration
 import com.pedro.encoder.input.video.CameraHelper
 import com.port80.app.audio.AudioMonitor
+import com.port80.app.audio.SessionLog
 import android.net.ConnectivityManager
 import android.content.Intent
 import android.os.Binder
@@ -116,6 +117,17 @@ class StreamingService : Service(), StreamingServiceControl, ConnectChecker {
     private var activeConnectionParams: ConnectionParams? = null
     private var activeEncoderConfig: EncoderConfig? = null
     private var activeAutoReconnect: Boolean = false
+
+    // ── Adaptive bitrate (ABR) ──
+    // RootEncoder reports the real sent bitrate about once per second; when the
+    // send queue is congested the video bitrate is lowered by 20%, and raised
+    // again by 10% after 5 good seconds, between [abrMinKbps] and [abrMaxKbps].
+    private var activeAbrEnabled: Boolean = true
+    @Volatile private var abrMaxKbps: Int = 0
+    @Volatile private var abrCurrentKbps: Int = 0
+    private var abrGoodSeconds: Int = 0
+    private var lastLoggedNetDrops: Long = 0L
+    private var rateWatchJob: Job? = null
     private var activeMaxReconnectAttempts: Int = 10
     private var connectionManager: ConnectionManager? = null
 
@@ -462,6 +474,9 @@ class StreamingService : Service(), StreamingServiceControl, ConnectChecker {
         RedactingLogger.i(TAG, "Terminating service: $reason")
 
         cleanupAndStop()
+        rateWatchJob?.cancel()
+        rateWatchJob = null
+        SessionLog.add("Transmisión detenida: $reason")
         AudioMonitor.markInactive()
         updateStreamState(StreamState.Stopped(reason))
 
@@ -543,6 +558,7 @@ class StreamingService : Service(), StreamingServiceControl, ConnectChecker {
 
     private suspend fun startStreamInternal(profileId: String) {
         AudioMonitor.resetSession()
+        SessionLog.startSession()
         try {
             val profile = profileRepository.getById(profileId)
             if (profile == null) {
@@ -592,6 +608,17 @@ class StreamingService : Service(), StreamingServiceControl, ConnectChecker {
             activeConnectionParams = connectionParams
             activeEncoderConfig = encoderConfig
             activeAutoReconnect = settingsRepository.getAutoReconnectEnabled().first()
+            activeAbrEnabled = settingsRepository.getAbrEnabled().first()
+            abrMaxKbps = encoderConfig.videoBitrateKbps
+            abrCurrentKbps = encoderConfig.videoBitrateKbps
+            abrGoodSeconds = 0
+            lastLoggedNetDrops = 0L
+            SessionLog.add(
+                "Inicio: ${encoderConfig.width}x${encoderConfig.height} " +
+                    "${encoderConfig.fps} fps, ${encoderConfig.videoBitrateKbps} kbps, " +
+                    "ABR ${if (activeAbrEnabled) "activado" else "apagado"}"
+            )
+            watchAudioRate()
             activeMaxReconnectAttempts = settingsRepository.getMaxReconnectAttempts().first()
 
             RedactingLogger.d(TAG, "startStream(): invoking encoderBridge.connect()")
@@ -783,6 +810,13 @@ class StreamingService : Service(), StreamingServiceControl, ConnectChecker {
         if (cm != null && cm.isReconnecting) {
             // Returning to Live after a reconnect attempt
             cm.notifyReconnectResult(true)
+            SessionLog.add("Reconectado")
+            // Resume at a safer bitrate after a network failure
+            if (activeAbrEnabled && abrMaxKbps > 0) {
+                abrCurrentKbps = maxOf(600, (abrMaxKbps * 0.7f).toInt())
+                abrGoodSeconds = 0
+                encoderBridge?.setVideoBitrateOnFly(abrCurrentKbps)
+            }
             updateStreamState(StreamState.Live())
             resumeStatsTicker()
         } else {
@@ -810,6 +844,14 @@ class StreamingService : Service(), StreamingServiceControl, ConnectChecker {
         ) {
             // A reconnect attempt failed — notify CM to schedule next retry
             cm.notifyReconnectResult(false)
+        } else if (cm != null && activeAutoReconnect && currentState is StreamState.Live &&
+            StreamFailureMapper.isRetryable(reason)
+        ) {
+            // Mid-stream network error (e.g. "Error send packet" on a mobile-data
+            // dip). Before, this ended the stream; now it reconnects like a drop.
+            SessionLog.add("Falla de red en vivo, reconectando…")
+            pauseStatsTicker()
+            cm.onConnectionLost()
         } else {
             // Non-retryable, or initial connection, or no CM — terminate
             cm?.stop()
@@ -820,6 +862,94 @@ class StreamingService : Service(), StreamingServiceControl, ConnectChecker {
     override fun onNewBitrate(bitrate: Long) {
         // Update stats when RootEncoder reports actual measured bitrate.
         _streamStats.value = _streamStats.value.copy(videoBitrateKbps = (bitrate / 1000).toInt())
+        try {
+            updateNetworkDrops()
+            if (activeAbrEnabled && _streamState.value is StreamState.Live) adaptBitrate()
+        } catch (e: Exception) {
+            RedactingLogger.e(TAG, "ABR tick failed", e)
+        }
+    }
+
+    private fun adaptBitrate() {
+        val bridge = encoderBridge ?: return
+        val max = abrMaxKbps
+        if (max <= 0) return
+        val min = maxOf(600, (max * 0.35f).toInt())
+        val current = if (abrCurrentKbps in min..max) abrCurrentKbps else max
+        if (bridge.hasCongestion()) {
+            abrGoodSeconds = 0
+            val target = maxOf(min, (current * 0.8f).toInt())
+            if (target < current) {
+                abrCurrentKbps = target
+                bridge.setVideoBitrateOnFly(target)
+                SessionLog.add("Red lenta: video baja a $target kbps")
+            }
+        } else {
+            abrGoodSeconds++
+            if (abrGoodSeconds >= 5 && current < max) {
+                abrGoodSeconds = 0
+                val target = minOf(max, (current * 1.1f).toInt() + 50)
+                abrCurrentKbps = target
+                bridge.setVideoBitrateOnFly(target)
+                if (target == max) SessionLog.add("Red estable: video vuelve a $target kbps")
+            }
+        }
+    }
+
+    private fun updateNetworkDrops() {
+        val (audio, video) = encoderBridge?.networkDroppedFrames() ?: return
+        AudioMonitor.setNetworkDrops(audio, video)
+        val total = audio + video
+        if (total - lastLoggedNetDrops >= 30) {
+            SessionLog.add("Red: se descartaron paquetes (audio $audio, video $video en total)")
+            lastLoggedNetDrops = total
+        }
+    }
+
+    /**
+     * Live bitrate change from the stream screen. With ABR on it becomes the new
+     * ceiling; it is also saved for the next stream. Never restarts the encoder.
+     */
+    override fun setLiveVideoBitrate(kbps: Int) {
+        if (kbps <= 0) return
+        abrMaxKbps = kbps
+        abrCurrentKbps = kbps
+        abrGoodSeconds = 0
+        encoderBridge?.setVideoBitrateOnFly(kbps)
+        activeEncoderConfig = activeEncoderConfig?.copy(videoBitrateKbps = kbps)
+        SessionLog.add("Bitrate cambiado en vivo a $kbps kbps")
+        serviceScope.launch {
+            try {
+                settingsRepository.setVideoBitrateKbps(kbps)
+            } catch (e: Exception) {
+                RedactingLogger.e(TAG, "Could not save bitrate", e)
+            }
+        }
+    }
+
+    /**
+     * If the mixer really delivers another sample rate (e.g. 44.1 kHz instead
+     * of 48 kHz), save the real one so the next stream starts correctly.
+     */
+    private fun watchAudioRate() {
+        rateWatchJob?.cancel()
+        rateWatchJob = serviceScope.launch {
+            AudioMonitor.status.collect { status ->
+                val suggested = status.suggestedSampleRate
+                if (suggested > 0) {
+                    SessionLog.add(
+                        "La mesa entrega ${status.measuredSampleRate} Hz, no ${status.sampleRate} Hz. " +
+                            "Guardado $suggested Hz: detener e iniciar de nuevo."
+                    )
+                    try {
+                        settingsRepository.setAudioSampleRate(suggested)
+                    } catch (e: Exception) {
+                        RedactingLogger.e(TAG, "Could not save sample rate", e)
+                    }
+                    rateWatchJob?.cancel()
+                }
+            }
+        }
     }
 
     override fun onDisconnect() {
@@ -832,6 +962,7 @@ class StreamingService : Service(), StreamingServiceControl, ConnectChecker {
         val cm = connectionManager
         if (previousState is StreamState.Live && activeAutoReconnect && cm != null) {
             // Mid-stream drop with auto-reconnect enabled — delegate to ConnectionManager
+            SessionLog.add("Conexión perdida, reconectando…")
             pauseStatsTicker()
             cm.onConnectionLost()
         } else if (previousState is StreamState.Reconnecting && cm != null) {

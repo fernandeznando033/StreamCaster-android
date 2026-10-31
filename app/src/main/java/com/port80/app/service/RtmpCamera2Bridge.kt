@@ -30,6 +30,7 @@ class RtmpCamera2Bridge(
 ) : EncoderBridge {
 
     companion object {
+        private const val SEND_CACHE_FRAMES = 500
         private const val TAG = "RtmpCamera2Bridge"
     }
 
@@ -197,6 +198,13 @@ class RtmpCamera2Bridge(
         val fullUrl = if (params.streamKey.isNotBlank()) "${params.baseUrl}/${params.streamKey}" else params.baseUrl
         RedactingLogger.i(TAG, "Connecting to $fullUrl")
         try {
+            // Larger send queue (~6 s instead of ~2.5 s) so short mobile-data
+            // dips are absorbed instead of discarding audio/video packets.
+            try {
+                camera.getStreamClient().resizeCache(SEND_CACHE_FRAMES)
+            } catch (e: Exception) {
+                RedactingLogger.e(TAG, "Could not resize send cache", e)
+            }
             camera.startStream(fullUrl)
             RedactingLogger.d(TAG, "startStream() invoked on encoder")
         } catch (e: Exception) {
@@ -242,6 +250,19 @@ class RtmpCamera2Bridge(
         val bitrateBps = bitrateKbps * 1000
         RedactingLogger.d(TAG, "setVideoBitrateOnFly(${bitrateKbps} kbps → $bitrateBps bps)")
         rtmpCamera2?.setVideoBitrateOnFly(bitrateBps)
+    }
+
+    override fun hasCongestion(): Boolean = try {
+        rtmpCamera2?.getStreamClient()?.hasCongestion() == true
+    } catch (e: Exception) {
+        false
+    }
+
+    override fun networkDroppedFrames(): Pair<Long, Long> = try {
+        val client = rtmpCamera2?.getStreamClient()
+        (client?.getDroppedAudioFrames() ?: 0L) to (client?.getDroppedVideoFrames() ?: 0L)
+    } catch (e: Exception) {
+        0L to 0L
     }
 
     override fun refreshStreamFlip() {

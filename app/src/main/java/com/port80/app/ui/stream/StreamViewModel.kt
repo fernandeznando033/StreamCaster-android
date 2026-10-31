@@ -2,6 +2,7 @@ package com.port80.app.ui.stream
 
 import com.port80.app.audio.AudioMonitor
 import com.port80.app.audio.AudioStatus
+import com.port80.app.audio.SessionLog
 import com.port80.app.service.StreamTweaks
 import android.app.Application
 import android.content.ComponentName
@@ -333,6 +334,26 @@ class StreamViewModel @Inject constructor(
 
     /** Live audio level, silence, clipping and dropout information. */
     val audioStatus: StateFlow<AudioStatus> = AudioMonitor.status
+
+    /** Events of the current stream (reconnections, bitrate, audio problems). */
+    val sessionLog: StateFlow<List<String>> = SessionLog.entries
+
+    /** Saved video bitrate (kbps), also the live ceiling while streaming. */
+    val videoBitrateKbps: StateFlow<Int> = settingsRepository.getVideoBitrateKbps()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 2500)
+
+    /** Change the video bitrate while live, without restarting the stream. */
+    fun setLiveVideoBitrate(kbps: Int) {
+        val control = serviceControl
+        if (control != null && streamState.value.let {
+                it is StreamState.Live || it is StreamState.Reconnecting
+            }
+        ) {
+            control.setLiveVideoBitrate(kbps)
+        } else {
+            viewModelScope.launch { settingsRepository.setVideoBitrateKbps(kbps) }
+        }
+    }
 
     /** Rotate the live stream 180 degrees (or back), without stopping it. */
     fun toggleStreamFlip() {

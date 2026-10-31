@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -22,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.port80.app.audio.AudioFxSettings
 import com.port80.app.audio.AudioFxStore
+import com.port80.app.audio.CompressorPreset
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -52,35 +55,35 @@ fun AudioFxPanel(modifier: Modifier = Modifier) {
 
         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
-        SwitchRow(
-            title = "Compresor",
-            subtitle = "Empareja el volumen: baja los picos fuertes",
-            checked = fx.compressorEnabled,
-            onChange = { v -> AudioFxStore.update { it.copy(compressorEnabled = v) } }
+        Text("Compresor", style = MaterialTheme.typography.titleSmall)
+        Text(
+            "Empareja el volumen: baja los picos fuertes y sube lo suave",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        DbSlider(
-            label = "Umbral",
-            value = fx.compThresholdDb,
-            range = -40f..0f,
-            enabled = fx.compressorEnabled,
-            onChange = { v -> AudioFxStore.update { it.copy(compThresholdDb = v) } }
-        )
-        ValueSlider(
-            label = "Relación",
-            valueText = "${formatNumber(fx.compRatio)}:1",
-            value = fx.compRatio,
-            range = 1f..10f,
-            step = 0.5f,
-            enabled = fx.compressorEnabled,
-            onChange = { v -> AudioFxStore.update { it.copy(compRatio = v) } }
-        )
-        DbSlider(
-            label = "Ganancia de compensación",
-            value = fx.compMakeupDb,
-            range = 0f..12f,
-            enabled = fx.compressorEnabled,
-            onChange = { v -> AudioFxStore.update { it.copy(compMakeupDb = v) } }
-        )
+        Spacer(modifier = Modifier.height(6.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            CompressorPreset.entries.forEach { preset ->
+                val selected = fx.compressorPreset == preset.ordinal
+                val onClick = { AudioFxStore.update { it.copy(compressorPreset = preset.ordinal) } }
+                if (selected) {
+                    Button(
+                        onClick = onClick,
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 4.dp)
+                    ) { Text(preset.label, maxLines = 1) }
+                } else {
+                    OutlinedButton(
+                        onClick = onClick,
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 4.dp)
+                    ) { Text(preset.label, maxLines = 1) }
+                }
+            }
+        }
 
         HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
@@ -99,7 +102,7 @@ fun AudioFxPanel(modifier: Modifier = Modifier) {
         )
         SwitchRow(
             title = "Entrada USB sin procesar",
-            subtitle = "Pide a Android el audio crudo de la mesa. Se aplica al iniciar la transmisión.",
+            subtitle = "Pide a Android el audio crudo de la mesa. Probar primero apagado. Se aplica al iniciar la transmisión.",
             checked = fx.rawUsbInput,
             onChange = { v -> AudioFxStore.update { it.copy(rawUsbInput = v) } }
         )

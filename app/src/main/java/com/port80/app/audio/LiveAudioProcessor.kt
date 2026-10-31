@@ -71,6 +71,8 @@ class LiveAudioProcessor(
     private var clipUntilMs = 0L
     private var meterDb = -90.0
     private var lastPublishMs = 0L
+    private var lastRateCheckMs = 0L
+    private var rateMismatch = false
 
     override fun process(pcmBuffer: ByteArray): ByteArray {
         try {
@@ -136,7 +138,10 @@ class LiveAudioProcessor(
         } catch (_: Throwable) {
             // Never break the audio thread; worst case the buffer passes through.
         }
-        return pcmBuffer
+        // RootEncoder reuses the same array for every read while earlier frames
+        // may still be waiting in the encoder queue. Returning a private copy
+        // keeps each queued frame intact (otherwise audio gets overwritten).
+        return pcmBuffer.copyOf()
     }
 
     private fun runEq(c: Int, input: Double): Double {
@@ -164,10 +169,11 @@ class LiveAudioProcessor(
             bandActive[b] = g != 0.0
             if (bandActive[b]) computeBiquad(b, g)
         }
-        compOn = s.compressorEnabled
-        thresholdDb = s.compThresholdDb.toDouble()
-        ratio = max(1.0, s.compRatio.toDouble())
-        makeupDb = s.compMakeupDb.toDouble()
+        val preset = CompressorPreset.of(s.compressorPreset)
+        compOn = preset != CompressorPreset.OFF
+        thresholdDb = preset.thresholdDb.toDouble()
+        ratio = max(1.0, preset.ratio.toDouble())
+        makeupDb = preset.makeupDb.toDouble()
         outputGain = 10.0.pow(s.outputGainDb / 20.0)
         limiterOn = s.limiterEnabled
         if (!compOn) compGrDb = 0.0
@@ -247,10 +253,11 @@ class LiveAudioProcessor(
         framesSinceStart += frames
         val receivedMs = framesSinceStart * 1000.0 / sampleRate
         val lostMs = (now - startMs) - receivedMs
+        checkRealSampleRate(now)
         if (lostMs < windowMinLostMs) windowMinLostMs = lostMs
         if (now - windowStartMs >= 2000) {
             val base = baselineLostMs
-            if (!base.isNaN() && windowMinLostMs - base > CUT_THRESHOLD_MS) {
+            if (!rateMismatch && !base.isNaN() && windowMinLostMs - base > CUT_THRESHOLD_MS) {
                 AudioMonitor.addCut(now)
             }
             // Never let the baseline go down by a single noisy window
@@ -258,6 +265,28 @@ class LiveAudioProcessor(
             windowStartMs = now
             windowMinLostMs = Double.MAX_VALUE
         }
+    }
+
+    /**
+     * After 10 s, compares the real number of samples per second with the
+     * configured rate. A mixer that really runs at 44.1 kHz while 48 kHz was
+     * requested produces "chipmunk" audio and constant gaps on YouTube.
+     */
+    private fun checkRealSampleRate(now: Long) {
+        val elapsed = now - startMs
+        if (elapsed < 10_000 || now - lastRateCheckMs < 5_000) return
+        lastRateCheckMs = now
+        val measured = (framesSinceStart * 1000.0 / elapsed).toInt()
+        val deviation = abs(measured - sampleRate).toDouble() / sampleRate
+        var suggested = 0
+        if (deviation > 0.03) {
+            val nearest = STANDARD_RATES.minByOrNull { abs(it - measured) } ?: sampleRate
+            if (nearest != sampleRate && abs(nearest - measured).toDouble() / nearest < 0.015) {
+                suggested = nearest
+            }
+        }
+        rateMismatch = suggested != 0
+        AudioMonitor.setMeasuredRate(measured, suggested)
     }
 
     private fun updateMonitoring(now: Long, inputPeak: Int, outputPeak: Double) {
@@ -285,5 +314,6 @@ class LiveAudioProcessor(
         const val CUT_THRESHOLD_MS = 50.0
         const val SILENCE_DB = -50.0
         const val SILENCE_MS = 8000L
+        val STANDARD_RATES = intArrayOf(8000, 16000, 22050, 32000, 44100, 48000)
     }
 }

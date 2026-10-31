@@ -22,6 +22,16 @@ data class AudioStatus(
     val channels: Int = 0,
     val usbDeviceName: String? = null,
     val rawSource: Boolean = false,
+    /** Sample rate really delivered by the input, measured over time (0 = not yet). */
+    val measuredSampleRate: Int = 0,
+    /**
+     * Standard rate the input really runs at when it differs from the configured
+     * one (e.g. mixer delivers 44.1 kHz while 48 kHz was requested). 0 = no mismatch.
+     */
+    val suggestedSampleRate: Int = 0,
+    /** Audio / video packets discarded because the network could not keep up. */
+    val netDroppedAudio: Long = 0L,
+    val netDroppedVideo: Long = 0L,
 )
 
 /** Process-wide holder of [AudioStatus], written by the audio thread. */
@@ -47,6 +57,14 @@ object AudioMonitor {
 
     internal fun publishLevels(levelDb: Float, silent: Boolean, clipping: Boolean) {
         _status.update { it.copy(active = true, levelDb = levelDb, silent = silent, clipping = clipping) }
+    }
+
+    internal fun setMeasuredRate(measured: Int, suggested: Int) {
+        _status.update { it.copy(measuredSampleRate = measured, suggestedSampleRate = suggested) }
+    }
+
+    fun setNetworkDrops(audio: Long, video: Long) {
+        _status.update { it.copy(netDroppedAudio = audio, netDroppedVideo = video) }
     }
 
     internal fun addCut(nowMs: Long) {
