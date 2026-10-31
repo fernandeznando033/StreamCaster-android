@@ -72,6 +72,7 @@ class LiveAudioProcessor(
     private var meterDb = -90.0
     private var lastPublishMs = 0L
     private var lastRateCheckMs = 0L
+    private var lastMeterMs = 0L
     private var rateMismatch = false
 
     override fun process(pcmBuffer: ByteArray): ByteArray {
@@ -301,7 +302,8 @@ class LiveAudioProcessor(
         val clipping = now < clipUntilMs
 
         val outDb = if (outputPeak > 0) 20.0 * log10(outputPeak) else -90.0
-        val elapsed = if (lastPublishMs == 0L) 0L else now - lastPublishMs
+        val elapsed = if (lastMeterMs == 0L) 0L else now - lastMeterMs
+        lastMeterMs = now
         meterDb = max(outDb, meterDb - elapsed * 0.02) // ~20 dB/s decay
         if (now - lastPublishMs >= 100) {
             lastPublishMs = now
