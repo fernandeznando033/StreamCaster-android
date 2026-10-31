@@ -17,6 +17,7 @@
 
     <!-- Wake lock for keeping CPU active during streaming -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <!-- Hardware features (not required — app can run without them) -->
     <uses-feature android:name="android.hardware.camera" android:required="false" />

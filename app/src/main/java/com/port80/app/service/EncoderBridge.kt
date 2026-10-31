@@ -69,6 +69,9 @@ interface EncoderBridge {
      */
     fun setStabilizationMode(mode: StabilizationMode)
 
+    /** Re-apply [StreamTweaks.flip180] to the outgoing stream. */
+    fun refreshStreamFlip() {}
+
     /** Release all encoder and camera resources. Call this on service destroy. */
     fun release()
 

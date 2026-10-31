@@ -17,6 +17,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.Equalizer
+import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.PlayArrow
@@ -24,6 +26,12 @@ import androidx.compose.material.icons.filled.Podcasts
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -52,11 +60,19 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import android.app.Activity
 import android.view.WindowManager
+import android.content.Context
+import android.os.Build
+import android.os.SystemClock
+import android.os.VibrationEffect
+import android.os.Vibrator
+import kotlinx.coroutines.delay
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.port80.app.data.model.CameraInfo
 import com.port80.app.data.model.EndpointProfile
 import com.port80.app.data.model.StopReason
 import com.port80.app.data.model.StreamState
+import com.port80.app.ui.components.AudioFxPanel
+import com.port80.app.ui.components.AudioStatusBar
 import com.port80.app.ui.components.CameraPreview
 import com.port80.app.ui.components.CameraPreviewPlaceholder
 import com.port80.app.ui.components.MinimalStreamingOverlay
@@ -81,6 +97,7 @@ import kotlinx.coroutines.flow.collectLatest
  *
  * Controls are at the right edge for easy thumb reach in landscape.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StreamScreen(
     viewModel: StreamViewModel = hiltViewModel(),
@@ -130,6 +147,56 @@ fun StreamScreen(
     }
 
     val snackbarHostState = remember { SnackbarHostState() }
+
+    // ── Live audio monitor, alerts and stream rotation ──
+    val audioStatus by viewModel.audioStatus.collectAsState()
+    val streamFlip180 by viewModel.streamFlip180.collectAsState()
+    var showAudioSheet by remember { mutableStateOf(false) }
+    var nowMs by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
+    val context = LocalContext.current
+
+    LaunchedEffect(isActiveStream) {
+        while (isActiveStream) {
+            nowMs = SystemClock.elapsedRealtime()
+            delay(1000)
+        }
+    }
+
+    // Vibrate when the mixer signal disappears
+    LaunchedEffect(audioStatus.silent, isActiveStream) {
+        if (isActiveStream && audioStatus.silent) {
+            vibrateAlert(context, longArrayOf(0, 400, 200, 400))
+            snackbarHostState.showSnackbar("Sin audio de la mesa: revisar cable USB, mesa y MAIN")
+        }
+    }
+
+    // Vibrate on audio dropouts (at most once every 15 s)
+    var lastCutAlertMs by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(audioStatus.cutCount) {
+        val now = SystemClock.elapsedRealtime()
+        if (isActiveStream && audioStatus.cutCount > 0 && now - lastCutAlertMs > 15_000) {
+            lastCutAlertMs = now
+            vibrateAlert(context, longArrayOf(0, 150, 100, 150))
+        }
+    }
+
+    if (showAudioSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showAudioSheet = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ) {
+            Text(
+                text = "Audio de la transmisión",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(horizontal = 16.dp)
+            )
+            AudioFxPanel(
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp)
+            )
+        }
+    }
 
     // Show error snackbar when stream stops with an error
     LaunchedEffect(streamState) {
@@ -222,9 +289,23 @@ fun StreamScreen(
                     viewModel = viewModel,
                     onSettingsClick = onNavigateToSettings,
                     onMinimalModeClick = { viewModel.toggleMinimalMode() },
+                    onAudioClick = { showAudioSheet = true },
+                    onFlipClick = { viewModel.toggleStreamFlip() },
+                    streamFlip180 = streamFlip180,
                     modifier = Modifier
                         .align(Alignment.CenterEnd)
                         .padding(end = 16.dp)
+                )
+            }
+
+            // Layer 5: audio meter and alerts (also visible in minimal mode)
+            if (isActiveStream) {
+                AudioStatusBar(
+                    status = audioStatus,
+                    nowMs = nowMs,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 12.dp)
                 )
             }
         }
@@ -240,6 +321,9 @@ private fun ControlPanel(
     viewModel: StreamViewModel,
     onSettingsClick: () -> Unit,
     onMinimalModeClick: () -> Unit,
+    onAudioClick: () -> Unit,
+    onFlipClick: () -> Unit,
+    streamFlip180: Boolean,
     modifier: Modifier = Modifier
 ) {
     val isStreaming = streamState is StreamState.Live ||
@@ -331,6 +415,21 @@ private fun ControlPanel(
             )
         }
 
+        // Audio EQ / compressor panel and 180-degree stream rotation
+        if (showCameraControls) {
+            ControlButton(
+                icon = Icons.Filled.Equalizer,
+                contentDescription = "Audio",
+                onClick = onAudioClick
+            )
+            ControlButton(
+                icon = Icons.Filled.ScreenRotation,
+                contentDescription = "Girar transmisión 180 grados",
+                onClick = onFlipClick,
+                active = streamFlip180
+            )
+        }
+
         // Minimal mode button (only shown when streaming)
         if (isStreaming) {
             ControlButton(
@@ -358,11 +457,12 @@ private fun ControlPanel(
 private fun ControlButton(
     icon: ImageVector,
     contentDescription: String,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    active: Boolean = false
 ) {
     SmallFloatingActionButton(
         onClick = onClick,
-        containerColor = Color.Black.copy(alpha = 0.6f),
+        containerColor = if (active) Color(0xFFFFA000) else Color.Black.copy(alpha = 0.6f),
         contentColor = Color.White,
         shape = CircleShape
     ) {
@@ -595,3 +695,17 @@ private fun stoppedMessage(reason: StopReason, detail: String?): String {
     return if (detail.isNullOrBlank()) base else "$base\n$detail"
 }
 
+
+/** Short vibration pattern used for audio alerts. Never throws. */
+@Suppress("DEPRECATION")
+private fun vibrateAlert(context: Context, pattern: LongArray) {
+    try {
+        val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            vibrator.vibrate(VibrationEffect.createWaveform(pattern, -1))
+        } else {
+            vibrator.vibrate(pattern, -1)
+        }
+    } catch (_: Exception) {
+    }
+}

@@ -1,6 +1,7 @@
 package com.port80.app.service
 
 import android.content.Context
+import com.port80.app.audio.AudioPipeline
 import com.pedro.common.ConnectChecker
 import com.pedro.common.VideoCodec as RootEncoderVideoCodec
 import com.pedro.library.srt.SrtCamera2
@@ -32,6 +33,8 @@ class SrtCamera2Bridge(
         private const val DEFAULT_SRT_STREAM_ID = "#!::m=publish"
     }
 
+    private var appContext: Context? = null
+
     private var srtCamera2: SrtCamera2? = null
 
     // ── Preview ──────────────────────────────────────────────────────────
@@ -54,6 +57,8 @@ class SrtCamera2Bridge(
         RedactingLogger.d(TAG, "startPreview(cameraId=${cameraId ?: "default"})")
         try {
             srtCamera2 = SrtCamera2(openGlView, connectChecker)
+            appContext = openGlView.context.applicationContext
+            applyStreamFlip()
             RedactingLogger.d(TAG, "SrtCamera2 instance created with OpenGlView")
             if (cameraId != null) {
                 srtCamera2?.startPreview(cameraId)
@@ -78,6 +83,7 @@ class SrtCamera2Bridge(
         RedactingLogger.d(TAG, "replaceViewWithBackground() — switching to headless mode")
         try {
             srtCamera2?.replaceView(context)
+            applyStreamFlip()
         } catch (e: Exception) {
             RedactingLogger.e(TAG, "replaceViewWithBackground() failed, falling back to stopPreview", e)
             srtCamera2?.stopPreview()
@@ -88,6 +94,7 @@ class SrtCamera2Bridge(
         RedactingLogger.d(TAG, "replaceView() — hot-swapping to new surface")
         try {
             srtCamera2?.replaceView(openGlView)
+            applyStreamFlip()
         } catch (e: Exception) {
             RedactingLogger.e(TAG, "replaceView() failed", e)
         }
@@ -125,10 +132,12 @@ class SrtCamera2Bridge(
                 config.keyframeIntervalSec,
                 config.rotation
             )
-            audioReady = camera.prepareAudio(
+            audioReady = AudioPipeline.prepare(
+                camera,
                 config.audioBitrateKbps * 1000,
                 config.audioSampleRate,
-                config.stereo
+                config.stereo,
+                appContext
             )
         } catch (e: Exception) {
             RedactingLogger.e(TAG, "Encoder prepare threw exception", e)
@@ -206,6 +215,22 @@ class SrtCamera2Bridge(
         val bitrateBps = bitrateKbps * 1000
         RedactingLogger.d(TAG, "setVideoBitrateOnFly(${bitrateKbps} kbps → $bitrateBps bps)")
         srtCamera2?.setVideoBitrateOnFly(bitrateBps)
+    }
+
+    override fun refreshStreamFlip() {
+        applyStreamFlip()
+    }
+
+    /** Rotates only the outgoing stream 180 degrees (both flips = 180 rotation). */
+    private fun applyStreamFlip() {
+        val flip = StreamTweaks.flip180.value
+        try {
+            val gl = srtCamera2?.glInterface ?: return
+            gl.setIsStreamHorizontalFlip(flip)
+            gl.setIsStreamVerticalFlip(flip)
+        } catch (e: Exception) {
+            RedactingLogger.e(TAG, "Failed to apply stream flip", e)
+        }
     }
 
     override fun setStabilizationMode(mode: StabilizationMode) {

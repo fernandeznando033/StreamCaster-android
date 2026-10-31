@@ -88,4 +88,7 @@ interface StreamingServiceControl {
      * Safe to call during preview or streaming.
      */
     fun setStabilizationMode(mode: StabilizationMode)
+
+    /** Re-apply the live 180-degree stream rotation toggle. */
+    fun refreshStreamFlip() {}
 }

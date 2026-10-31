@@ -31,6 +31,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.port80.app.ui.components.AudioFxPanel
 
 /**
  * Settings screen for audio configuration.
@@ -116,6 +117,12 @@ fun AudioSettingsScreen(
                     )
                 }
             )
+
+            // ── Live processing (EQ, compressor, limiter) ───────────
+
+            SectionHeader("Ecualizador y compresor")
+
+            AudioFxPanel()
         }
     }
 }

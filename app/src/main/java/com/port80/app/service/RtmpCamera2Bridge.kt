@@ -1,6 +1,7 @@
 package com.port80.app.service
 
 import android.content.Context
+import com.port80.app.audio.AudioPipeline
 import android.view.ScaleGestureDetector
 import com.pedro.common.ConnectChecker
 import com.pedro.common.VideoCodec as RootEncoderVideoCodec
@@ -32,6 +33,8 @@ class RtmpCamera2Bridge(
         private const val TAG = "RtmpCamera2Bridge"
     }
 
+    private var appContext: Context? = null
+
     private var rtmpCamera2: RtmpCamera2? = null
 
     // ── Preview ──────────────────────────────────────────────────────────
@@ -54,6 +57,8 @@ class RtmpCamera2Bridge(
         RedactingLogger.d(TAG, "startPreview(cameraId=${cameraId ?: "default"})")
         try {
             rtmpCamera2 = RtmpCamera2(openGlView, connectChecker)
+            appContext = openGlView.context.applicationContext
+            applyStreamFlip()
             attachPinchZoom(openGlView)
             RedactingLogger.d(TAG, "RtmpCamera2 instance created with OpenGlView")
             if (cameraId != null) {
@@ -79,6 +84,7 @@ class RtmpCamera2Bridge(
         RedactingLogger.d(TAG, "replaceViewWithBackground() — switching to headless mode")
         try {
             rtmpCamera2?.replaceView(context)
+            applyStreamFlip()
         } catch (e: Exception) {
             RedactingLogger.e(TAG, "replaceViewWithBackground() failed, falling back to stopPreview", e)
             rtmpCamera2?.stopPreview()
@@ -89,6 +95,7 @@ class RtmpCamera2Bridge(
         RedactingLogger.d(TAG, "replaceView() — hot-swapping to new surface")
         try {
             rtmpCamera2?.replaceView(openGlView)
+            applyStreamFlip()
             attachPinchZoom(openGlView)
         } catch (e: Exception) {
             RedactingLogger.e(TAG, "replaceView() failed", e)
@@ -166,10 +173,12 @@ class RtmpCamera2Bridge(
                 config.keyframeIntervalSec,
                 config.rotation
             )
-            audioReady = camera.prepareAudio(
+            audioReady = AudioPipeline.prepare(
+                camera,
                 config.audioBitrateKbps * 1000,
                 config.audioSampleRate,
-                config.stereo
+                config.stereo,
+                appContext
             )
         } catch (e: Exception) {
             RedactingLogger.e(TAG, "Encoder prepare threw exception", e)
@@ -233,6 +242,22 @@ class RtmpCamera2Bridge(
         val bitrateBps = bitrateKbps * 1000
         RedactingLogger.d(TAG, "setVideoBitrateOnFly(${bitrateKbps} kbps → $bitrateBps bps)")
         rtmpCamera2?.setVideoBitrateOnFly(bitrateBps)
+    }
+
+    override fun refreshStreamFlip() {
+        applyStreamFlip()
+    }
+
+    /** Rotates only the outgoing stream 180 degrees (both flips = 180 rotation). */
+    private fun applyStreamFlip() {
+        val flip = StreamTweaks.flip180.value
+        try {
+            val gl = rtmpCamera2?.glInterface ?: return
+            gl.setIsStreamHorizontalFlip(flip)
+            gl.setIsStreamVerticalFlip(flip)
+        } catch (e: Exception) {
+            RedactingLogger.e(TAG, "Failed to apply stream flip", e)
+        }
     }
 
     override fun setStabilizationMode(mode: StabilizationMode) {

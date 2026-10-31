@@ -4,6 +4,8 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.res.Configuration
+import com.pedro.encoder.input.video.CameraHelper
+import com.port80.app.audio.AudioMonitor
 import android.net.ConnectivityManager
 import android.content.Intent
 import android.os.Binder
@@ -320,6 +322,10 @@ class StreamingService : Service(), StreamingServiceControl, ConnectChecker {
         }
     }
 
+    override fun refreshStreamFlip() {
+        encoderBridge?.refreshStreamFlip()
+    }
+
     override fun setStabilizationMode(mode: StabilizationMode) {
         val state = _streamState.value
         if (state is StreamState.Previewing || state is StreamState.Live) {
@@ -456,6 +462,7 @@ class StreamingService : Service(), StreamingServiceControl, ConnectChecker {
         RedactingLogger.i(TAG, "Terminating service: $reason")
 
         cleanupAndStop()
+        AudioMonitor.markInactive()
         updateStreamState(StreamState.Stopped(reason))
 
         @Suppress("DEPRECATION")
@@ -535,6 +542,7 @@ class StreamingService : Service(), StreamingServiceControl, ConnectChecker {
     }
 
     private suspend fun startStreamInternal(profileId: String) {
+        AudioMonitor.resetSession()
         try {
             val profile = profileRepository.getById(profileId)
             if (profile == null) {
@@ -635,6 +643,17 @@ class StreamingService : Service(), StreamingServiceControl, ConnectChecker {
         }
     }
 
+    /**
+     * Stream rotation for the current display rotation, using the same mapping
+     * RootEncoder uses for the preview (0, 90, 180 or 270).
+     */
+    private fun displayStreamRotation(): Int = try {
+        CameraHelper.getCameraOrientation(this)
+    } catch (e: Exception) {
+        RedactingLogger.e(TAG, "Could not read display rotation", e)
+        -1
+    }
+
     private suspend fun buildEncoderConfig(
         profile: com.port80.app.data.model.EndpointProfile
     ): EncoderConfig {
@@ -654,11 +673,15 @@ class StreamingService : Service(), StreamingServiceControl, ConnectChecker {
             // Portrait: swap so the narrower side is width
             orientedWidth = minOf(resolution.width, resolution.height)
             orientedHeight = maxOf(resolution.width, resolution.height)
-            rotation = 90
+            // 270 when the phone is upside-down in portrait
+            rotation = if (displayStreamRotation() == 270) 270 else 90
         } else {
             orientedWidth = maxOf(resolution.width, resolution.height)
             orientedHeight = minOf(resolution.width, resolution.height)
-            rotation = 0
+            // 180 when the phone is held in landscape the "other way"
+            // (reverse landscape). Before this fix the preview looked right
+            // but the live stream went out upside-down.
+            rotation = if (displayStreamRotation() == 180) 180 else 0
         }
 
         return EncoderConfig(

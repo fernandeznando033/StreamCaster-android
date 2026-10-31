@@ -1,5 +1,8 @@
 package com.port80.app.ui.stream
 
+import com.port80.app.audio.AudioMonitor
+import com.port80.app.audio.AudioStatus
+import com.port80.app.service.StreamTweaks
 import android.app.Application
 import android.content.ComponentName
 import android.content.Context
@@ -323,6 +326,18 @@ class StreamViewModel @Inject constructor(
      */
     fun switchCamera(cameraId: String) {
         serviceControl?.switchCamera(cameraId)
+    }
+
+    /** Whether the outgoing stream is rotated 180 degrees. */
+    val streamFlip180: StateFlow<Boolean> = StreamTweaks.flip180
+
+    /** Live audio level, silence, clipping and dropout information. */
+    val audioStatus: StateFlow<AudioStatus> = AudioMonitor.status
+
+    /** Rotate the live stream 180 degrees (or back), without stopping it. */
+    fun toggleStreamFlip() {
+        StreamTweaks.flip180.value = !StreamTweaks.flip180.value
+        serviceControl?.refreshStreamFlip()
     }
 
     // ══════════════════════════════════════════════
