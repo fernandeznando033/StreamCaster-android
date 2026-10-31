@@ -23,6 +23,12 @@ data class AudioFxSettings(
     val limiterEnabled: Boolean = true,
     /** Use Android's UNPROCESSED audio source when a USB mixer is connected. */
     val rawUsbInput: Boolean = false,
+    /**
+     * Audio timestamps from the sample count (continuous) instead of the
+     * wall-clock time of each read. USB audio arrives in bursts, so clock
+     * timestamps are irregular and players drop the overlapping pieces.
+     */
+    val continuousAudioTimestamps: Boolean = true,
 ) {
     companion object {
         const val BAND_COUNT = 5
@@ -73,7 +79,12 @@ object AudioFxStore {
 
     /** Back to defaults (flat EQ, compressor off) but keeps the raw-USB choice. */
     fun resetProcessing() {
-        update { s -> AudioFxSettings(rawUsbInput = s.rawUsbInput) }
+        update { s ->
+            AudioFxSettings(
+                rawUsbInput = s.rawUsbInput,
+                continuousAudioTimestamps = s.continuousAudioTimestamps
+            )
+        }
     }
 
     private fun load(p: SharedPreferences): AudioFxSettings {
@@ -86,6 +97,7 @@ object AudioFxStore {
             outputGainDb = p.getFloat("output_gain", d.outputGainDb),
             limiterEnabled = p.getBoolean("limiter_enabled", d.limiterEnabled),
             rawUsbInput = p.getBoolean("raw_usb_input_v2", d.rawUsbInput),
+            continuousAudioTimestamps = p.getBoolean("continuous_audio_ts", d.continuousAudioTimestamps),
         )
     }
 
@@ -97,6 +109,7 @@ object AudioFxStore {
             putFloat("output_gain", s.outputGainDb)
             putBoolean("limiter_enabled", s.limiterEnabled)
             putBoolean("raw_usb_input_v2", s.rawUsbInput)
+            putBoolean("continuous_audio_ts", s.continuousAudioTimestamps)
         }.apply()
     }
 }

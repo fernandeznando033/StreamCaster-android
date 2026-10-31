@@ -107,6 +107,13 @@ fun AudioFxPanel(modifier: Modifier = Modifier) {
             onChange = { v -> AudioFxStore.update { it.copy(rawUsbInput = v) } }
         )
 
+        SwitchRow(
+            title = "Tiempos de audio continuos",
+            subtitle = "Evita microcortes con mesas USB. Se aplica al iniciar la transmisión.",
+            checked = fx.continuousAudioTimestamps,
+            onChange = { v -> AudioFxStore.update { it.copy(continuousAudioTimestamps = v) } }
+        )
+
         Spacer(modifier = Modifier.height(8.dp))
         OutlinedButton(
             onClick = { AudioFxStore.resetProcessing() },

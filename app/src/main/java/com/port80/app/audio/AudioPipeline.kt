@@ -5,6 +5,7 @@ import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.media.MediaRecorder
 import android.os.Build
+import com.pedro.encoder.TimestampMode
 import com.pedro.library.base.Camera2Base
 import com.port80.app.util.RedactingLogger
 
@@ -31,6 +32,14 @@ object AudioPipeline {
 
         val wantRaw = fx.rawUsbInput && usb != null && context != null && supportsUnprocessed(context)
         camera.setCustomAudioEffect(LiveAudioProcessor(sampleRate, channels))
+        try {
+            camera.setTimestampMode(
+                TimestampMode.CLOCK,
+                if (fx.continuousAudioTimestamps) TimestampMode.BUFFER else TimestampMode.CLOCK
+            )
+        } catch (e: Exception) {
+            RedactingLogger.e(TAG, "Could not set audio timestamp mode", e)
+        }
 
         var usedRaw = false
         var ok = false
@@ -53,6 +62,13 @@ object AudioPipeline {
 
         val name = usb?.productName?.toString()?.takeIf { it.isNotBlank() } ?: usb?.let { "USB" }
         AudioMonitor.setInputInfo(sampleRate, channels, name, usedRaw)
+        val supported = usb?.sampleRates?.takeIf { it.isNotEmpty() }?.joinToString(", ") { "$it" }
+            ?: "cualquiera"
+        SessionLog.add(
+            "Audio: ${name ?: "micrófono interno"}, pedido $requestedSampleRate Hz, " +
+                "usado $sampleRate Hz (la mesa admite: $supported), " +
+                "tiempos ${if (fx.continuousAudioTimestamps) "continuos" else "por reloj"}"
+        )
         RedactingLogger.d(
             TAG,
             "Audio prepared ok=$ok rate=$sampleRate ch=$channels usb=${usb != null} raw=$usedRaw"
